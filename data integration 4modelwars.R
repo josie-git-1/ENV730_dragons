@@ -40,11 +40,11 @@ find_duplicate_keys <- function(data, ...) {
 fluxnet_sites <- read.csv("data/FluxNet_Sites_2024.csv")
     
             #debug character display error
-              #fluxnet_sites$SITE_NAME <- 
-              #  iconv(fluxnet_sites$SITE_NAME, 
-              #        from = "", 
-              #        to = "UTF-8", 
-              #        sub = "")
+              fluxnet_sites$SITE_NAME <- 
+                iconv(fluxnet_sites$SITE_NAME, 
+                      from = "", 
+                      to = "UTF-8", 
+                      sub = "")
 
   #keep sites w CH4 data and valid coordinates      
 
@@ -74,50 +74,6 @@ fluxnet_ch4_sf %>%
 fluxnet_ch4_sf %>%
   st_drop_geometry() %>%
   select(SITE_ID, SITE_NAME) %>% summary
-
-
-# Where are wetlands inundated? WAD2M -------------------------------------
-
-wad2m_data <- rast("data/final_project/WAD2M_wetlands_2000-2020_025deg_Ver2.0.nc")
-range(names(wad2m_data))
-#the layers are named as YYYY-MM
-
-#building a monthly climatology, ignoring missing values in winter where snow and ice prevent inundation mapping
-wad2m_month <- as.integer(substr(names(wad2m_all), 6, 7))
-
-
-wad2m_climatology <- tapp(wad2m_all, index = wad2m_month, fun = mean, na.rm = TRUE)
-names(wad2m_climatology) <- month.abb
-
-#fill winter gaps with climatology ##and put it on the prediction grid
-
-##to_ct_grid <- function(r) {
-##  r %>%
-##    resample(ct_grid, method = "bilinear") %>%
-##    clamp(lower = 0, upper = 1, values = TRUE) %>%
-##    mask(ct_grid)
-##}
-
-wad2m_2018 <- wad2m_all[[grepl("^2018", names(wad2m_all))]]
-
-wad2m <- cover(wad2m_2018, wad2m_climatology) 
-names(wad2m) <- month.abb
-
-plot(wad2m[[c(1, 4, 7, 10)]])
-
-#
-tibble(month = month.abb,
-       fraction_2018 = global(wad2m, "mean", na.rm = TRUE)[, 1],
-       fraction_climatology = global(wad2m_climatology, "mean", na.rm = TRUE)[, 1])
-
-
-#What to look for: WAD2M
-#- Where: Higher fractions should follow river valleys (for example, the Connecticut River), coastal marshes, and low-lying terrain. Most upland cells are near zero.
-#- When: Inundated area is largest in winter and spring, when evapotranspiration is low and snowmelt arrives, and smallest in late summer. That is the opposite of the flux-density cycle, so the two partly cancel in the budget.
-#- 2018 vs. average: Compare fraction_2018 with fraction_climatology to see whether 2018 was a wet or dry year for wetlands.
-#- Resolution: WAD2M is 0.25 degrees (about 25 km). Resampling to 5 km makes smoother maps but adds no new information about where individual wetlands are.
-
-
 
 # Extract static raster predictors ----------------------------------------
 
@@ -174,21 +130,6 @@ names(soil)
     find_duplicate_keys(fluxnet_vi_monthly, SITE_ID, YearMon)
     
     range(fluxnet_vi_monthly$YearMon)
-    
-    
-    
-### Dynamic monthly inundation data
-    
-    inundation <- terra::rast("data/wad2m_data.tif")
-    names(inundation)
-    
-    fluxnet_ch4_inundation <- st_transform(fluxnet_ch4_sf, crs = crs(inundation))
-    
-    inundation_values <- terra::extract(inundation, vect(fluxnet_ch4_inundation)) %>%
-      select(-ID) %>%
-      rename(soil_bulk_density = BulkDensity,
-             soil_ph = PH,
-             soil_nitrogen = Nitrogen)
     
 ### Monthly flux data
     
@@ -263,7 +204,7 @@ names(soil)
     names(era5_ppt_monthly) <- as.character(zoo::as.yearmon(names(era5_ppt_monthly)))
     names(era5_tmean_monthly) <- as.character(zoo::as.yearmon(names(era5_tmean_monthly)))
     
-    fluxnet_ch4_era5 <- st_transform(fluxnet_ch4_with_context, crs = crs(era5_ppt_monthly))
+    fluxnet_ch4_era5 <- st_transform(fluxnet_ch4_sf, crs = crs(era5_ppt_monthly))
     
     era5_ppt_long <- terra::extract(era5_ppt_monthly, vect(fluxnet_ch4_era5), ID = FALSE) %>%
       mutate(SITE_ID = fluxnet_ch4_era5$SITE_ID) %>%
@@ -295,57 +236,152 @@ names(soil)
     
     #### inundation
     
-        #lines 299-315 produced by Microsoft Copilot AI chat (prompt: https://copilot.cloud.microsoft/chat/share/eyJzaGFyZUlkIjoiYTJlZjlkNjItMTFlNC00NTAzLWFkOGEtNDg1YTk2YmNhNGI1IiwiY29udmVyc2F0aW9uSWQiOiI2MTM2MzE2Yy05NmNhLTQyNDYtODlkNS0yOTdiYzcyNGQ4ZmEifQ%3D%3D)
     
-    flux_coords <- fluxnet_ch4_sf %>%
-      st_coordinates() %>%
-      as.data.frame()
+            #### FIRST get data frame from wad2m
     
-    flux_lookup <- fluxnet_ch4_sf %>%
-      st_drop_geometry() %>%
-      select(SITE_ID) %>%
-      bind_cols(flux_coords) %>%
-      mutate(
-        Long = round((X - 0.125) / 0.25) * 0.25 + 0.125,
-        Lat  = round((Y - 0.125) / 0.25) * 0.25 + 0.125
-      ) %>%
-      select(SITE_ID, Long, Lat)
-    
-    lswt_site_monthly <- lswt_final %>%
-      inner_join(flux_lookup, by = c("Long", "Lat"))
-
-    nlyr(inundation_monthly)
-    
-    names(inundation_monthly) <- as.character(zoo::as.yearmon(names(inundation_monthly)))
-    
-    fluxnet_ch4_inundation <- st_transform(fluxnet_ch4_sf, crs = crs(inundation_monthly))
-    
-    inundation_long <- terra::extract(inundation_monthly, vect(fluxnet_ch4_inundation), ID = FALSE) %>%
-      mutate(SITE_ID = fluxnet_ch4_inundation$SITE_ID) %>%
-      pivot_longer(-SITE_ID, names_to = "YearMon", values_to = "inundation_p_f") %>%
-      mutate(YearMon = zoo::as.yearmon(YearMon))
-    
-    inundation_monthly <- inundation_long %>%
-      left_join(inundation_tmean_long, by = c("SITE_ID", "YearMon"))
-    
-    find_duplicate_keys(inundation_monthly, SITE_ID, YearMon)
-    
-    range(inundation_monthly$YearMon)
-    
-    before_rows <- nrow(flux_model_era5)
-    
-    flux_model_inundation <- flux_model_era5 %>%
-      left_join(inundation_monthly, by = c("SITE_ID", "YearMon"))
-    
-    after_rows <- nrow(flux_model_inundation)
-    
-    before_rows
-    
-    after_rows
+                    # Source - https://stackoverflow.com/a/71964103
+                    # Posted by Robert Hijmans, modified by community. See post 'Timeline' for change history
+                    # Retrieved 2026-11-15, License - CC BY-SA 4.0
+                    
+                    # source 2: https://towardsdatascience.com/how-to-crack-open-netcdf-files-in-r-and-extract-data-as-time-series-24107b70dcd/
+                    
+                    library(ncdf4)
+                    library(tidyverse)
+                    wad2m_nc_data <- nc_open("data/final_project/WAD2M_wetlands_2000-2020_025deg_Ver2.0.nc")
+                    print(wad2m_nc_data)
+                    
+                    attributes(wad2m_nc_data$var)
+                    attributes(wad2m_nc_data$dim)
+                    
+                    # Get latitude and longitude with the ncvar_get function and store each into their own object:
+                    
+                    lat <- ncvar_get(wad2m_nc_data, "lat")
+                    nlat <- dim(lat) #to check it matches the metadata: 720
+                    
+                    lon <- ncvar_get(wad2m_nc_data, "lon")
+                    nlon <- dim(lon) #to check, should be 1440
+                    
+                    # Check your lat lon dimensions match the information in the metadata we explored before:
+                    
+                    print(c(nlon, nlat))
+                    
+                    # Get the time variable. Remember: our metadata said our time units are in seconds since 1981-01-01 00:00:00, so you will not see a recognizable date and time format, but a big number like "457185600". We will take care of this later
+                    
+                    time <- ncvar_get(wad2m_nc_data, "time")
+                    head(time) # just to have a look at the numbers
+                    tunits <- ncatt_get(wad2m_nc_data, "time", "units") #check units
+                    nt <- dim(time) #should be 252
+                    
+                    #get the variable in "matrix slices"
+                    lswt_array <- ncvar_get(wad2m_nc_data, "Fw") 
+                    
+                    fillvalue <- ncatt_get(wad2m_nc_data, "Fw", "_FillValue")
+                    
+                    dim(lswt_array) #to check; this should give you 1440 720 252
+                    
+                    #right away let's replace the nc FillValues with NAs
+                    lswt_array[lswt_array==fillvalue$value] <- NA
+                    lswt_array
+                    
+                    # human-readable time -----------------------------------------------------
+                    
+                    origin_date <- as.Date("1992-01-01")  # define origin date
+                    
+                    # Convert list to vector for easier processing
+                    days_vec <- unlist(time)
+                    
+                    # Convert days to Date objects
+                    dates <- origin_date + days_vec
+                    
+                    # Format into Year-Month (YYYY-MM)
+                    year_month <- format(dates, "%Y-%m")
+                    
+                    # Output
+                    print(year_month)
+                    range(year_month)
+                    
+                    #Create 2D matrix of long, lat and time
+                    
+                    lonlattime <- as.matrix(expand.grid(lon,lat,year_month)) # this might take several seconds
+                    
+                    #reshape whole lswt_array
+                    
+                    lswt_vec_long <- as.vector(lswt_array)
+                    length(lswt_vec_long)
+                    
+                    #Create data.frame
+                    
+                    lswt_obs <- data.frame(cbind(lonlattime, lswt_vec_long))
+                    
+                    head(lswt_obs)
+                    
+                    colnames(lswt_obs) <- c("Long","Lat","Date","Fw")
+                    
+                    head(lswt_obs)
+                    
+                    # Bold move time: remove all rows with NA in LSWT_final:
+                    lswt_final <- na.omit(lswt_obs)
+                    
+                    dim(lswt_obs)
+                    dim(lswt_final)
+                    head(lswt_final)
+                    
+                    lswt_final <- lswt_final %>%
+                      mutate(
+                        Long = as.numeric(Long),
+                        Lat = as.numeric(Lat)
+                      )
+                    
+                    #lines 338-357 below are generated from Microsoft Copilot AI chat (prompt:https://copilot.cloud.microsoft/chat/share/eyJzaGFyZUlkIjoiYTJlZjlkNjItMTFlNC00NTAzLWFkOGEtNDg1YTk2YmNhNGI1IiwiY29udmVyc2F0aW9uSWQiOiI2MTM2MzE2Yy05NmNhLTQyNDYtODlkNS0yOTdiYzcyNGQ4ZmEifQ%3D%3D)
+                    
+                    
+                    flux_coords <- fluxnet_ch4_sf %>%
+                      st_coordinates() %>%
+                      as.data.frame()
+                    
+                    flux_lookup <- fluxnet_ch4_sf %>%
+                      st_drop_geometry() %>%
+                      select(SITE_ID) %>%
+                      bind_cols(flux_coords) %>%
+                      mutate(
+                        Long = round((X - 0.125) / 0.25) * 0.25 + 0.125,
+                        Lat  = round((Y - 0.125) / 0.25) * 0.25 + 0.125
+                      ) %>%
+                      select(SITE_ID, Long, Lat)
+                    
+                    lswt_site_monthly <- lswt_final %>%
+                      inner_join(
+                        flux_lookup,
+                        by = c("Long", "Lat"),
+                        relationship = "many-to-many"
+                      )
+                    
+          #now finish extracting to tower sites
+          
+          find_duplicate_keys(lswt_site_monthly, SITE_ID, Date)
+          
+          lswt_monthly <- lswt_site_monthly %>%
+          mutate(
+          YearMon = zoo::as.yearmon(Date)
+          ) %>%
+          select(SITE_ID, YearMon, Fw)
+                    
+          before_rows <- nrow(flux_model_era5)
+                    
+          flux_model_lswt <- flux_model_era5 %>%
+          left_join(
+          lswt_monthly,
+          by = c("SITE_ID", "YearMon")
+          )
+                    
+          after_rows <- nrow(flux_model_lswt)
+                    
+          before_rows
+          after_rows
     
 #build the model-ready table
     
-    NE_methane_model_data <- flux_model_inundation %>%
+    NE_methane_model_data <- flux_model_lswt %>%
       select(SITE_ID, SITE_NAME, YearMon,
              FCH4_F_gC,
              NDVI, EVI,
@@ -372,12 +408,10 @@ names(soil)
     find_duplicate_keys(NE_methane_model_data, SITE_ID, YearMon)
     
     NE_methane_model_data %>%
-      mutate(complete_predictors = complete.cases(P_F, TA_F, VPD_F,
-                                                  NDVI, EVI,
+      mutate(complete_predictors = complete.cases(NDVI, EVI,
                                                   soil_ph, soil_nitrogen,
-                                                  climate_map, climate_mat,
-                                                  elevation_m,
-                                                  era5_p_f, era5_ta_f)) %>%
+                                                  era5_p_f, era5_ta_f,
+                                                  Fw)) %>%
       ungroup() %>%
       reframe(.by = SITE_ID,
               total_rows = n(),
